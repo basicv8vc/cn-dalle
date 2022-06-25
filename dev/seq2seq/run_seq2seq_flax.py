@@ -21,8 +21,8 @@ Script adapted from run_summarization_flax.py
 
 import os
 # set a common huggingface cache folder (used with datasets and transformers) and wandb cache folder (used with artifacts)
-os.environ['HF_HOME'] = '/data/huggingface/'     # required before importing transformers & datasets
-os.environ['WANDB_CACHE_DIR'] = '/data/wandb/'   # required before importing wandb
+os.environ['HF_HOME'] = './cache/huggingface/'     # required before importing transformers & datasets
+os.environ['WANDB_CACHE_DIR'] = './cache/wandb/'   # required before importing wandb
 
 import logging as pylogging    # To avoid collision with transformers.utils.logging
 import sys
@@ -51,6 +51,7 @@ from flax.jax_utils import unreplicate
 from flax.training import train_state
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
 from transformers import (
+    BartConfig,
     CONFIG_MAPPING,
     FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
     AutoConfig,
@@ -68,7 +69,7 @@ import wandb
 logger = pylogging.getLogger(__name__)
 
 try:
-    nltk.data.find("tokenizers/punkt")
+    nltk.data.find("tokenizers/punkt")  # sentence tokenizer
 except (LookupError, OSError):
     if is_offline_mode():
         raise LookupError(
@@ -87,7 +88,8 @@ MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 OUTPUT_VOCAB_SIZE = 16384 + 1  # encoded image token space + 1 for bos
 OUTPUT_LENGTH = 256 + 1  # number of encoded tokens + 1 for bos
 BOS_TOKEN_ID = 16384
-BASE_MODEL = 'facebook/bart-large-cnn'  # we currently have issues with bart-large
+# BASE_MODEL = 'facebook/bart-large-cnn'  # we currently have issues with bart-large
+BASE_MODEL = 'fnlp_jax_version'  # JAX version "fnlp/bart-large-chinese"
 
 
 @dataclass
@@ -390,8 +392,8 @@ def main():
     
     # Set up wandb run
     wandb.init(
-        entity='wandb',
-        project='hf-flax-dalle-mini',
+        entity='zh-dalle',
+        project='funseq',
         job_type='Seq2SeqVQGAN',
         config=parser.parse_args()
     )
@@ -424,7 +426,7 @@ def main():
     #
     data_files = {}
     if data_args.train_file is not None:
-        data_files["train"] = data_args.train_file
+        data_files["train"] = data_args.train_file  # tsv
     if data_args.validation_file is not None:
         data_files["validation"] = data_args.validation_file
     if data_args.test_file is not None:
@@ -491,7 +493,7 @@ def main():
         # Create a custom model and initialize it randomly
         model = CustomFlaxBartForConditionalGeneration(config, seed=training_args.seed, dtype=getattr(jnp, model_args.dtype))
 
-        # Use pre-trained weights for encoder
+        # Use pre-trained weights for encoder, decoder is random initialized
         model.params['model']['encoder'] = base_model.params['model']['encoder']
         model.params['model']['shared'] = base_model.params['model']['shared']
         del base_model
@@ -501,10 +503,12 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained(
             model_args.model_name_or_path, cache_dir=model_args.cache_dir, use_fast=model_args.use_fast_tokenizer
         )
+    print("type(tokenizer): {}".format(tpye(tokenizer)))
+    print(tokenizer)
 
     print(f"TPUs: {jax.device_count()}")
     assert jax.device_count() == 8, "TPUs in use, please check running processes"
-
+    return
     prefix = data_args.source_prefix if data_args.source_prefix is not None else ""
 
     # Preprocessing the datasets.
@@ -520,8 +524,8 @@ def main():
         return
 
     # Get the column names for input/target.
-    text_column = data_args.text_column
-    encoding_column = data_args.encoding_column
+    text_column = data_args.text_column  # "caption"
+    encoding_column = data_args.encoding_column  # "encoding"
 
     # Temporarily set max_target_length for training.
     max_target_length = data_args.max_target_length
@@ -536,6 +540,9 @@ def main():
         return shifted_input_ids
 
     def preprocess_function(examples):
+        """
+        处理每一个样本
+        """
         inputs = examples[text_column]
         inputs = [prefix + inp for inp in inputs]
 	# Setting padding="max_length" as we need fixed length inputs for jitted functions
