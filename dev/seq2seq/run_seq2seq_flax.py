@@ -27,6 +27,7 @@ os.environ['WANDB_CACHE_DIR'] = './cache/wandb/'   # required before importing w
 import logging as pylogging    # To avoid collision with transformers.utils.logging
 import sys
 import time
+import datetime
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -89,7 +90,7 @@ OUTPUT_VOCAB_SIZE = 16384 + 1  # encoded image token space + 1 for bos
 OUTPUT_LENGTH = 256 + 1  # number of encoded tokens + 1 for bos
 BOS_TOKEN_ID = 16384
 # BASE_MODEL = 'facebook/bart-large-cnn'  # we currently have issues with bart-large
-BASE_MODEL = 'fnlp_jax_version'  # JAX version "fnlp/bart-large-chinese"
+BASE_MODEL = '/home/lj/fnlp_jax_version'  # JAX version "fnlp/bart-large-chinese"
 
 
 @dataclass
@@ -116,7 +117,7 @@ class ModelArguments:
         default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
     )
     cache_dir: Optional[str] = field(
-        default=None, metadata={"help": "Where do you want to store the pretrained models downloaded from s3"}
+        default="/mnt/disks/persist/cache", metadata={"help": "Where do you want to store the pretrained models downloaded from s3"}
     )
     use_fast_tokenizer: bool = field(
         default=True,
@@ -255,10 +256,10 @@ class DataTrainingArguments:
         else:
             if self.train_file is not None:
                 extension = self.train_file.split(".")[-1]
-                assert extension in ["tsv", "csv", "json"], "`train_file` should be a tsv, csv or json file."
+                assert extension in ["tsv", "csv", "json", "parquet"], "`train_file` should be a tsv, csv or json file."
             if self.validation_file is not None:
                 extension = self.validation_file.split(".")[-1]
-                assert extension in ["tsv", "csv", "json"], "`validation_file` should be a tsv, csv or json file."
+                assert extension in ["tsv", "csv", "json", "parquet"], "`validation_file` should be a tsv, csv or json file."
         if self.val_max_target_length is None:
             self.val_max_target_length = self.max_target_length
 
@@ -370,6 +371,9 @@ def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
+    # import tensorflow as tf
+    # tf.profiler.experimental.server.start(6000)
+    jax.profiler.start_trace("/home/lj/tmp/")
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -392,8 +396,9 @@ def main():
     
     # Set up wandb run
     wandb.init(
-        entity='zh-dalle',
-        project='funseq',
+        entity='funseq',
+        project='zh-dalle',
+        name="trainging" + str(datetime.datetime.now()).replace(" ", "-"),
         job_type='Seq2SeqVQGAN',
         config=parser.parse_args()
     )
@@ -435,7 +440,7 @@ def main():
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
-    # Set up items to load or create
+    # Set up items to load or create        
     tokenizer = None
     artifact_dir = None
 
@@ -500,15 +505,15 @@ def main():
 
     # Load tokenizer if it has not been set
     if tokenizer is None:
-        tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer = AutoTokenizer.from_pretrained(  # BertTokenizerFast
             model_args.model_name_or_path, cache_dir=model_args.cache_dir, use_fast=model_args.use_fast_tokenizer
         )
-    print("type(tokenizer): {}".format(tpye(tokenizer)))
+    print("type(tokenizer): {}".format(type(tokenizer)))
     print(tokenizer)
 
     print(f"TPUs: {jax.device_count()}")
     assert jax.device_count() == 8, "TPUs in use, please check running processes"
-    return
+    
     prefix = data_args.source_prefix if data_args.source_prefix is not None else ""
 
     # Preprocessing the datasets.
@@ -549,6 +554,8 @@ def main():
         model_inputs = tokenizer(
             inputs, max_length=data_args.max_source_length, padding="max_length", truncation=True, return_tensors="np"
         )
+        # print(model_inputs.keys())  # (['input_ids', 'token_type_ids', 'attention_mask']
+        model_inputs.pop("token_type_ids")
 
         # set up targets
         # Note: labels correspond to our target indices
@@ -776,6 +783,7 @@ def main():
 
             eval_loader = data_loader(input_rng, eval_dataset, eval_batch_size)
             eval_steps = len(eval_dataset) // eval_batch_size
+            print("eval_batch_size: {}, len(eval_dataset): {}, eval_steps: {}".format(eval_batch_size, len(eval_dataset), eval_steps))
             for _ in tqdm(range(eval_steps), desc="Evaluating...", position=2, leave=False):
                 # Model forward
                 batch = next(eval_loader)
@@ -863,6 +871,7 @@ def main():
         # Generate an epoch by shuffling sampling indices from the train dataset
         train_loader = data_loader(input_rng, train_dataset, train_batch_size, shuffle=True)
         steps_per_epoch = len(train_dataset) // train_batch_size
+        print("train_batch_size: {}, len(train_dataset): {}, steps_per_epoch: {}".format(train_batch_size, len(train_dataset), steps_per_epoch))
         # train
         for step in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
             global_step +=1
@@ -872,7 +881,7 @@ def main():
             if global_step % data_args.log_interval == 0 and jax.process_index() == 0:
                 # log metrics
                 wandb_log(unreplicate(train_metric), step=global_step, prefix='train')
-
+            # print(type(global_step),type(training_args.eval_steps))  # int, None
             if global_step % training_args.eval_steps == 0:
                 run_evaluation()
             
@@ -930,3 +939,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
