@@ -33,6 +33,7 @@ from functools import partial
 from pathlib import Path
 from typing import Callable, Optional
 import json
+import copy
 
 import datasets
 import nltk  # Here to have a nice missing dependency error message early on
@@ -90,7 +91,7 @@ OUTPUT_VOCAB_SIZE = 16384 + 1  # encoded image token space + 1 for bos
 OUTPUT_LENGTH = 256 + 1  # number of encoded tokens + 1 for bos
 BOS_TOKEN_ID = 16384
 # BASE_MODEL = 'facebook/bart-large-cnn'  # we currently have issues with bart-large
-BASE_MODEL = '/home/lj/fnlp_jax_version'  # JAX version "fnlp/bart-large-chinese"
+BASE_MODEL = "/home/lj/fnlp_bart_base_Chinese_jax_version"  # '/home/lj/fnlp_jax_version'  # JAX version "fnlp/bart-large-chinese"
 
 
 @dataclass
@@ -296,7 +297,8 @@ class CustomFlaxBartModule(FlaxBartModule):
         self.encoder = FlaxBartEncoder(self.config, dtype=self.dtype, embed_tokens=self.shared)
 
         # the decoder has a different config
-        decoder_config = BartConfig(self.config.to_dict())
+        # decoder_config = BartConfig(self.config.to_dict())
+        decoder_config = copy.deepcopy(self.config)
         decoder_config.max_position_embeddings = self.config.max_position_embeddings_decoder
         decoder_config.vocab_size = self.config.vocab_size_output
         self.decoder = FlaxBartDecoder(decoder_config, dtype=self.dtype, embed_tokens=self.decoder_embed)
@@ -551,6 +553,7 @@ def main():
         inputs = examples[text_column]
         inputs = [prefix + inp for inp in inputs]
 	# Setting padding="max_length" as we need fixed length inputs for jitted functions
+        print("max_source_length: {}".format(data_args.max_source_length))
         model_inputs = tokenizer(
             inputs, max_length=data_args.max_source_length, padding="max_length", truncation=True, return_tensors="np"
         )
